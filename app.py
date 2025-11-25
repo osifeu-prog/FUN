@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from typing import Dict
 
@@ -36,8 +35,7 @@ dp = Dispatcher()
 
 fastapi_app = FastAPI()
 
-# זיכרון מצב משתמשים מינימלי (אפשר להחליף ל-DB בהמשך)
-# user_states[user_id] = {"shared_ok": bool, "payment_proof_msg_id": int | None, "approved": bool}
+# מצב משתמשים בזיכרון
 user_states: Dict[int, Dict] = {}
 
 # Keyboards
@@ -78,7 +76,6 @@ async def on_start(message: Message):
     )
     await message.answer(text, reply_markup=main_keyboard())
 
-    # שליחת התראה לאדמין על משתמש חדש בבוט
     if ADMIN_CHAT_ID:
         await bot.send_message(
             ADMIN_CHAT_ID,
@@ -104,10 +101,8 @@ async def learn_second_step(callback: CallbackQuery):
     user_id = callback.from_user.id
     state = user_states.setdefault(user_id, {"shared_ok": False, "payment_proof_msg_id": None, "approved": False})
 
-    # נאכוף "אימות שיתוף" בצורה הצהרתית מינימלית: נבקש מהמשתמש לאשר ששיתף.
-    # אם רוצים הקשחה, אפשר להוסיף שיתוף קישור בדיקה/forward לוגים וכדומה.
     if not state["shared_ok"]:
-        state["shared_ok"] = True  # מקבלים את הצהרת המשתמש לשלב הזה
+        state["shared_ok"] = True
         await callback.message.edit_text(
             "מצוין! עכשיו שלב התשלום כדי לפתוח את כל ההטבות.\n\n"
             f"אנא שלח כאן צילום מסך/תמונה של אישור הפקדה על סך {PRICE_TEXT}.\n"
@@ -120,7 +115,7 @@ async def learn_second_step(callback: CallbackQuery):
     else:
         await callback.message.edit_text(
             "כדי לראות עוד שימושים, עליך להשלים שלב האישור. "
-            "אנא העלה תמונת אישור הפקדה כאן. לאחר האישור תפתח הגישה המלאה."
+            "אנא העלה תמונת אישור הפקדה כאן."
         )
     await callback.answer()
 
@@ -128,13 +123,10 @@ async def learn_second_step(callback: CallbackQuery):
 async def on_payment_proof(message: Message):
     user_id = message.from_user.id
     state = user_states.setdefault(user_id, {"shared_ok": False, "payment_proof_msg_id": None, "approved": False})
-
-    # שמירת מזהה ההודעה של התמונה לצורך רפרנס
     state["payment_proof_msg_id"] = message.message_id
 
     await message.reply("קיבלתי את אישור התשלום. שולח לאדמין לבדיקה...")
 
-    # שליחת בקשה לאדמין לאישור/דחייה
     if ADMIN_CHAT_ID:
         caption = (
             f"אישור תשלום חדש לבדיקה:\n"
@@ -142,7 +134,6 @@ async def on_payment_proof(message: Message):
             f"סכום: {PRICE_TEXT}\n"
             "לאשר או לדחות?"
         )
-        # השגת קובץ התמונה באיכות הגבוהה ביותר
         photo = message.photo[-1]
         file_id = photo.file_id
 
@@ -153,16 +144,14 @@ async def on_payment_proof(message: Message):
             reply_markup=admin_approval_keyboard(user_id),
         )
 
-    # הצגת תמונת פרומו מהפרויקט למשתמש (כפי שביקשת)
     try:
         await bot.send_photo(
             chat_id=user_id,
             photo=InputFile(ASSETS_PROMO_IMAGE_PATH),
-            caption="הנה התמונה מהפרויקט בגיט. נעדכן לאחר אישור/דחייה."
+            caption="הנה התמונה מהפרויקט בגיט."
         )
     except Exception as e:
         logger.warning(f"שליחת תמונת פרומו נכשלה: {e}")
-        await message.reply("נעשה ניסיון להציג תמונת פרומו, אבל משהו השתבש. נמשיך בתהליך האישור.")
 
 @dp.callback_query(F.data.startswith("admin_approve:"))
 async def admin_approve(callback: CallbackQuery):
@@ -178,14 +167,13 @@ async def admin_approve(callback: CallbackQuery):
     await callback.message.edit_caption((callback.message.caption or "") + "\n\nסטטוס: אושר ✅")
     await callback.answer("אושר")
 
-    # שליחת ההזמנה לקבוצה עם הסבר לפני תשלום (כאן אחרי האישור בפועל)
     try:
         await bot.send_message(
             chat_id=target_user_id,
             text=(
                 "אושר! הנה ההזמנה לקבוצה הפרימיום:\n"
                 f"{GROUP_PREMIUM_INVITE_LINK}\n\n"
-                "בקהילה הזו תנתן גישה להמון בוטים, הטבות, וקהילה שמבינה כלכלה וחברות!"
+                "בקהילה הזו תנתן גישה להמון בוטים והטבות!"
             )
         )
     except Exception as e:
@@ -208,53 +196,32 @@ async def admin_reject(callback: CallbackQuery):
     try:
         await bot.send_message(
             chat_id=target_user_id,
-            text="הבקשה נדחתה. אנא ודא שהעלית אישור תקין, ונסה שוב."
+            text="הבקשה נדחתה. אנא ודא שהעלית אישור תקין."
         )
     except Exception as e:
         logger.error(f"שליחת הודעת דחייה נכשלה ל-{target_user_id}: {e}")
 
 @dp.message()
 async def on_any_message(message: Message):
-    # מעקב אחרי כניסה לקבוצה: אם מישהו מצטרף לקבוצה המעקב, נעדכן אדמין
     if message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
         if message.chat.id == GROUP_MONITOR_ID and message.new_chat_members:
             for m in message.new_chat_members:
                 if ADMIN_CHAT_ID:
                     await bot.send_message(
                         ADMIN_CHAT_ID,
-                        f"משתמש נכנס לקבוצה למעקב: @{m.username or 'ללא'} (ID: {m.id}) בקבוצה {GROUP_MONITOR_ID}"
+                        f"משתמש נכנס לקבוצה: @{m.username or 'ללא'} (ID: {m.id})"
                     )
-    # אם זה פרטי, ואין התאמות — נזמין ללחוץ על הכפתור
     elif message.chat.type == ChatType.PRIVATE and not message.photo:
         await message.answer(
             "לחץ על הכפתור כדי ללמוד מה הבוט הזה יכול לעשות.",
             reply_markup=main_keyboard()
         )
 
-# Webhook setup endpoints
+# --- Webhook setup ---
 @fastapi_app.on_event("startup")
 async def on_startup():
     webhook_url = f"{WEBHOOK_BASE}/{WEBHOOK_SECRET}"
     try:
         await bot.set_webhook(url=webhook_url)
         logger.info(f"Webhook set to: {webhook_url}")
-    except Exception as e:
-        logger.error(f"Failed to set webhook: {e}")
-
-@fastapi_app.post("/{secret_path}")
-async def handle_update(secret_path: str, request: Request):
-    if secret_path != WEBHOOK_SECRET:
-        return {"status": "ignored"}
-
-    body = await request.json()
-    update = Update.model_validate(body)
-    await dp.feed_update(bot, update)
-    return {"status": "ok"}
-
-@fastapi_app.on_event("shutdown")
-async def on_shutdown():
-    try:
-        await bot.delete_webhook()
-    except Exception as e:
-        logger.error(f"Failed to delete webhook: {e}")
-    await bot.session.close()
+    except Exception
