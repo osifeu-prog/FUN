@@ -224,4 +224,8 @@ async def on_startup():
     try:
         await bot.set_webhook(url=webhook_url)
         logger.info(f"Webhook set to: {webhook_url}")
-    except Exception
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}")
+
+@fastapi_app.post("/{secret_path}")
+async def handle_update(secret_path
